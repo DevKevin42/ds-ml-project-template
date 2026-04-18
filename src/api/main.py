@@ -8,9 +8,14 @@ import joblib
 import pandas as pd
 
 # Inicializamos la app
-app = FastAPI(title="API de Predicción de Precios de Vivienda (California)", version="1.0")
+app = FastAPI(
+    title="API de Predicción de Precios de Viviendcleara (California)",
+    version="1.0"
+)
 
-# INSTRUCCIONES: Define el esquema de datos esperado por la API (Las variables X que usa tu modelo)
+# =========================
+# INPUT DEL USUARIO
+# =========================
 class HousingFeatures(BaseModel):
     longitude: float
     latitude: float
@@ -20,46 +25,92 @@ class HousingFeatures(BaseModel):
     population: float
     households: float
     median_income: float
-    # Añade cualquier variable categórica o enriquecida que el modelo requiera
-    # ej: ocean_proximity: str 
-    # ej: rooms_per_household: float
+    ocean_proximity: str  # importante para encoding
 
-# Variable global para cargar el modelo
-# IMPORTANTE: Asegúrate de guardar tu modelo en "models/best_model.pkl" o ajusta la ruta
+# =========================
+# CARGA DEL MODELO
+# =========================
 model = None
 
 @app.on_event("startup")
 def load_model():
-    """
-    Carga el modelo globalmente al iniciar el servidor usando joblib.
-    """
     global model
     try:
         model = joblib.load("models/best_model.pkl")
+        print("Modelo cargado correctamente.")
     except Exception as e:
-        print("Advertencia: No se pudo cargar el modelo. ¿Ya lo entrenaste y guardaste?")
+        print("Error cargando modelo:", e)
 
+# =========================
+# ENDPOINTS
+# =========================
 @app.get("/")
 def home():
-    return {"mensaje": "Bienvenido a la API del Proyecto Final de Ciencia de Datos"}
+    return {"mensaje": "API de predicción funcionando"}
 
+# =========================
+# FUNCIÓN DE TRANSFORMACIÓN
+# =========================
+def preprocess_input(data: dict):
+    """
+    Replica la lógica del Notebook 2
+    """
+
+    df = pd.DataFrame([data])
+
+    # =====================
+    # FEATURE ENGINEERING
+    # =====================
+    df["rooms_per_household"] = df["total_rooms"] / df["households"]
+    df["rooms_per_person"] = df["total_rooms"] / df["population"]
+    df["bedrooms_per_room"] = df["total_bedrooms"] / df["total_rooms"]
+
+    # =====================
+    # ONE HOT ENCODING
+    # =====================
+    categorias = [
+        "<1H OCEAN",
+        "INLAND",
+        "ISLAND",
+        "NEAR BAY",
+        "NEAR OCEAN"
+    ]
+
+    for cat in categorias:
+        df[f"ocean_proximity_{cat}"] = 1 if data["ocean_proximity"] == cat else 0
+
+    # Elimina columna original
+    df = df.drop(columns=["ocean_proximity"])
+
+    return df
+
+# =========================
+# PREDICCIÓN
+# =========================
 @app.post("/predict")
 def predict_price(features: HousingFeatures):
-    """
-    INSTRUCCIONES:
-    1. Convierte el objeto 'features' (Pydantic) a un formato que Scikit-Learn entienda (ej un DataFrame o Array 2D).
-       Toma en cuenta que el modelo en producción espera exactamente las mismas columnas que usaste para entrenar.
-    2. Usa model.predict()
-    3. Retorna la predicción en un diccionario, ej: {"predicted_price": 250000.0}
-    """
-    if model is None:
-        return {"error": "El modelo no se ha cargado."}
-    
-    # Tu código aquí para predecir
-    prediction = 0.0 # Reemplazar con model.predict()
-    
-    return {"predicted_price": prediction}
 
-# Instrucciones para correr la API localmente:
-# En la terminal, ejecuta:
-# uvicorn src.api.main:app --reload
+    if model is None:
+        return {"error": "Modelo no cargado"}
+
+    try:
+        # Convertir input a dict
+        data = features.dict()
+
+        # Preprocesar igual que entrenamiento
+        df = preprocess_input(data)
+
+        # Asegurar orden de columnas (CRÍTICO)
+        model_columns = model.feature_names_in_
+        df = df[model_columns]
+
+        # Predicción
+        prediction = model.predict(df)[0]
+
+        return {
+            "predicted_price": float(prediction),
+            "message": "Predicción exitosa"
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
